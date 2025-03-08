@@ -78,10 +78,8 @@ def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
     # ✅ Define GStreamer Pipeline
     gst_pipeline = (
         f"rtspsrc location={rtsp_url} protocols=tcp latency=100 do-timestamp=true is-live=true "
-        f"! rtph264depay ! h264parse ! avdec_h264 ! videoconvert "
-        f"! video/x-raw,format=BGR,width=640,height=480 ! appsink drop=true sync=false"
+        f"! rtph264depay ! h264parse ! decodebin ! videoconvert ! video/x-raw,format=BGR ! appsink"
     )
-
 
     # ✅ Define FFMPEG Pipeline (Optional Fallback)
     ffmpeg_pipeline = rtsp_url  # OpenCV handles this internally with CAP_FFMPEG
