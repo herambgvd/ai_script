@@ -6,6 +6,7 @@ import urllib.parse
 import argparse
 import logging
 import requests
+import time
 import sys
 import gi
 import json
@@ -50,30 +51,61 @@ def load_model():
         sys.exit(1)
 
 # ✅ Initialize Video Capture with Retry
-def initialize_capture(rtsp_url, max_retries=3):
+def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
+    """
+    Initialize RTSP video capture using GStreamer.
+    - If GStreamer fails, it optionally falls back to FFMPEG.
+    - Retries multiple times before failing.
+    """
     logging.info("Initializing video capture...")
-    logging.info("Processing RTSP URL for GStreamer pipeline...")
+    
+    # ✅ Ensure RTSP URL is properly formatted
     parsed_url = urllib.parse.urlparse(rtsp_url)
-    username = parsed_url.username
-    password = parsed_url.password
+    username, password = parsed_url.username, parsed_url.password
 
     if username and password:
-        encoded_password = urllib.parse.quote(password)
+        encoded_password = urllib.parse.quote(password, safe='')
         new_netloc = f"{username}:{encoded_password}@{parsed_url.hostname}:{parsed_url.port}"
         rtsp_url = urllib.parse.urlunparse((parsed_url.scheme, new_netloc, parsed_url.path, parsed_url.params, parsed_url.query, parsed_url.fragment))
 
     logging.info(f"✅ Processed RTSP URL: {rtsp_url}")
-    pipeline =  f"rtspsrc location={rtsp_url} protocols=tcp latency=100 do-timestamp=true is-live=true ! rtph264depay ! h264parse ! decodebin ! videoconvert ! video/x-raw,format=BGR ! appsink"
 
+    # ✅ Define GStreamer Pipeline
+    gst_pipeline = (
+        f"rtspsrc location={rtsp_url} protocols=tcp latency=100 do-timestamp=true is-live=true "
+        f"! rtph264depay ! h264parse ! decodebin ! videoconvert ! video/x-raw,format=BGR ! appsink"
+    )
+
+    # ✅ Define FFMPEG Pipeline (Optional Fallback)
+    ffmpeg_pipeline = rtsp_url  # OpenCV handles this internally with CAP_FFMPEG
+
+    # ✅ Attempt to Open Video Stream with Retries
     for attempt in range(1, max_retries + 1):
-        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-        if cap.isOpened():
-            logging.info(f"✅ Video capture initialized successfully on attempt {attempt}.")
-            return cap
-        logging.warning(f"⚠️ Attempt {attempt}/{max_retries} failed to open RTSP stream. Retrying...")
+        logging.info(f"🚀 Attempt {attempt}/{max_retries} to open RTSP stream...")
 
-    logging.error("❌ Failed to open RTSP stream after multiple attempts!")
-    return None
+        # Try GStreamer First
+        if not use_ffmpeg:
+            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            backend_used = "GStreamer"
+        else:
+            cap = cv2.VideoCapture(ffmpeg_pipeline, cv2.CAP_FFMPEG)
+            backend_used = "FFMPEG"
+
+        if cap.isOpened():
+            logging.info(f"✅ Video capture initialized successfully using {backend_used} on attempt {attempt}.")
+            return cap
+
+        logging.warning(f"⚠️ Attempt {attempt} failed to open RTSP stream using {backend_used}. Retrying in 3 seconds...")
+        cap.release()  # Ensure previous instance is closed
+        time.sleep(3)  # Exponential Backoff (adjust delay if needed)
+
+    # ✅ If GStreamer Fails, Try FFMPEG as a Fallback
+    if not use_ffmpeg:
+        logging.error("❌ GStreamer failed to open RTSP stream after multiple attempts! Trying FFMPEG...")
+        return initialize_capture(rtsp_url, max_retries, use_ffmpeg=True)
+
+    logging.error("❌ RTSP stream failed to open after all retries using both GStreamer and FFMPEG!")
+    return None  # Return None if all attempts fail
 
 # ✅ GStreamer Pipeline for RTMP Broadcasting
 def setup_live_broadcasting(rtmp_url):
