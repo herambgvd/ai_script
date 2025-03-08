@@ -77,8 +77,8 @@ def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
 
     # ✅ Define GStreamer Pipeline
     gst_pipeline = (
-        f"rtspsrc location={rtsp_url} protocols=tcp latency=100 do-timestamp=true is-live=true "
-        f"! rtph264depay ! h264parse ! decodebin ! videoconvert ! video/x-raw,format=BGR ! appsink"
+        f"rtspsrc location={rtsp_url} latency=500 protocols=tcp do-timestamp=true is-live=true "
+        f"! rtph264depay ! h264parse ! decodebin ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true"
     )
 
     # ✅ Define FFMPEG Pipeline (Optional Fallback)
@@ -129,7 +129,10 @@ def setup_live_broadcasting(rtmp_url):
 def load_custom_model(model_path):
     try:
         logging.info("Loading YOLO model...")
-        ai_model = YOLO(model_path, task="detect")
+        if model_path == "fire":
+            MODEL_PATH = os.getenv('FIRE_PATH')
+
+        ai_model = YOLO(MODEL_PATH, task="detect")
         logging.info("✅ Model loaded successfully.")
         return ai_model
     except Exception as e:
