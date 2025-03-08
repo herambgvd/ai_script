@@ -1,3 +1,4 @@
+import os
 import numpy as np
 np.finfo(np.dtype("float32"))
 np.finfo(np.dtype("float64"))
@@ -12,6 +13,9 @@ import gi
 import json
 from ultralytics import YOLO
 from confluent_kafka import Producer
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 gi.require_version('Gst', '1.0')
@@ -42,7 +46,8 @@ def get_kafka_producer():
 def load_model():
     try:
         logging.info("Loading YOLO model...")
-        model_path = 'yolov8s.pt'
+        BASE_PATH = os.getenv('BASE_PATH')
+        model_path = f'{BASE_PATH}/yolov8s.pt'
         ai_model = YOLO(model_path, task="detect")
         logging.info("✅ Model loaded successfully.")
         return ai_model
