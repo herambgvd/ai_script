@@ -8,13 +8,12 @@ sys.path.append(BASE_DIR)
 
 import matching
 import numpy as np
+import basetrack
+import kalman_filter 
 
-from .basetrack import BaseTrack, TrackState
-from .kalman_filter import KalmanFilter
 
-
-class STrack(BaseTrack):
-    shared_kalman = KalmanFilter()
+class STrack(basetrack.BaseTrack):
+    shared_kalman = kalman_filter.KalmanFilter()
 
     def __init__(self, tlwh, score):
         # wait activate
@@ -28,7 +27,7 @@ class STrack(BaseTrack):
 
     def predict(self):
         mean_state = self.mean.copy()
-        if self.state != TrackState.Tracked:
+        if self.state != basetrack.TrackState.Tracked:
             mean_state[7] = 0
         self.mean, self.covariance = self.kalman_filter.predict(
             mean_state, self.covariance
@@ -40,7 +39,7 @@ class STrack(BaseTrack):
             multi_mean = np.asarray([st.mean.copy() for st in stracks])
             multi_covariance = np.asarray([st.covariance for st in stracks])
             for i, st in enumerate(stracks):
-                if st.state != TrackState.Tracked:
+                if st.state != basetrack.TrackState.Tracked:
                     multi_mean[i][7] = 0
             multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(
                 multi_mean, multi_covariance
@@ -58,7 +57,7 @@ class STrack(BaseTrack):
         )
 
         self.tracklet_len = 0
-        self.state = TrackState.Tracked
+        self.state = basetrack.TrackState.Tracked
         if frame_id == 1:
             self.is_activated = True
         # self.is_activated = True
@@ -70,7 +69,7 @@ class STrack(BaseTrack):
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
         self.tracklet_len = 0
-        self.state = TrackState.Tracked
+        self.state = basetrack.TrackState.Tracked
         self.is_activated = True
         self.frame_id = frame_id
         if new_id:
@@ -92,7 +91,7 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh)
         )
-        self.state = TrackState.Tracked
+        self.state = basetrack.TrackState.Tracked
         self.is_activated = True
 
         self.score = new_track.score
@@ -164,7 +163,7 @@ class BYTETracker(object):
         self.det_thresh = args["track_thresh"] + 0.1
         self.buffer_size = int(frame_rate / 30.0 * args["track_buffer"])
         self.max_time_lost = self.buffer_size
-        self.kalman_filter = KalmanFilter()
+        self.kalman_filter = kalman_filter.KalmanFilter()
 
     def update(self, output_results, img_info, img_size):
         self.frame_id += 1
@@ -226,7 +225,7 @@ class BYTETracker(object):
         for itracked, idet in matches:
             track = strack_pool[itracked]
             det = detections[idet]
-            if track.state == TrackState.Tracked:
+            if track.state == basetrack.TrackState.Tracked:
                 track.update(detections[idet], self.frame_id)
                 activated_starcks.append(track)
             else:
@@ -246,7 +245,7 @@ class BYTETracker(object):
         r_tracked_stracks = [
             strack_pool[i]
             for i in u_track
-            if strack_pool[i].state == TrackState.Tracked
+            if strack_pool[i].state == basetrack.TrackState.Tracked
         ]
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
         matches, u_track, u_detection_second = matching.linear_assignment(
@@ -255,7 +254,7 @@ class BYTETracker(object):
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
-            if track.state == TrackState.Tracked:
+            if track.state == basetrack.TrackState.Tracked:
                 track.update(det, self.frame_id)
                 activated_starcks.append(track)
             else:
@@ -264,7 +263,7 @@ class BYTETracker(object):
 
         for it in u_track:
             track = r_tracked_stracks[it]
-            if not track.state == TrackState.Lost:
+            if not track.state == basetrack.TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
 
@@ -300,7 +299,7 @@ class BYTETracker(object):
         # print('Ramained match {} s'.format(t4-t3))
 
         self.tracked_stracks = [
-            t for t in self.tracked_stracks if t.state == TrackState.Tracked
+            t for t in self.tracked_stracks if t.state == basetrack.TrackState.Tracked
         ]
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_starcks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)

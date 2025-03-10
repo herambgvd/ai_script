@@ -1,10 +1,10 @@
-device: cpu
-fps: 30
-match_thresh: 0.8
-min_box_area: 10
-save_result: True
-track_buffer: 30
-track_thresh: 0.5
-aspect_ratio_thresh: 1.6
-ckpt: bytetrack_s_mot17.pth.tar
-fp16: True
+device: gpu  # ✅ Keep using GPU for better performance
+fps: 30  # ✅ Maintain 30 FPS
+match_thresh: 0.8  # ✅ Good balance for accuracy
+min_box_area: 10  # ⚠ Consider increasing if too many small boxes appear
+save_result: True  # ✅ Saves tracking results (good for debugging)
+track_buffer: 20  # ✅ Good for handling occlusions
+track_thresh: 0.5  # ✅ Detection confidence threshold (keep for now)
+aspect_ratio_thresh: 1.6  # ✅ Prevents tracking extremely tall objects
+ckpt: bytetrack_s_mot17.pth.tar  # ✅ Check if the model is optimal for faces
+fp16: True  # ✅ Half-precision for GPU acceleration (⚠ Works only if GPU supports FP16)

@@ -1,141 +1,198 @@
+import time
 import base
+import cv2
 import os
 import numpy as np
-import cv2
 import json
+import torch
+import yaml
 import requests
 import base64
+import logging
 from face_utils.detection import SCRFD
+from face_utils.face_tracking.tracker.byte_tracker import BYTETracker
+from face_utils.face_tracking.tracker.visualize import plot_tracking
+
+# ✅ Setup Logging
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 # ✅ Load SCRFD Model with GPU Support
 def load_scrfd_model(model_path):
+    logging.info("🚀 Loading SCRFD model...")
     scrfd = SCRFD(model_file=model_path)
-    scrfd.prepare(ctx_id=0, input_size=(640, 640))  # Adjust input size as needed
-    print("✅ SCRFD Model Loaded with Tracking Enabled")
+    scrfd.prepare(ctx_id=0, input_size=(640, 640))  
+    logging.info("✅ SCRFD Model Loaded with Tracking Enabled")
     return scrfd
 
-# ✅ Function to Convert Cropped Face to Base64
-def encode_face_to_base64(frame, x1, y1, x2, y2, padding=20, target_size=(128, 128)):
-    """Crops the detected face region with padding, resizes to a fixed size, and encodes it to base64."""
+
+# ✅ Load Tracking Configuration
+def load_config(file_name):
+    logging.info(f"🔍 Loading YAML configuration from {file_name}")
     try:
-        h, w, _ = frame.shape
-        x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
-        x2, y2 = min(w, x2 + padding), min(h, y2 + padding)
-
-        cropped_face = frame[y1:y2, x1:x2]
-
-        if cropped_face.shape[0] < 64 or cropped_face.shape[1] < 64:
-            return None  # Skip small faces
-
-        resized_face = cv2.resize(cropped_face, target_size, interpolation=cv2.INTER_LINEAR)
-        _, buffer = cv2.imencode(".jpg", resized_face)
-        return base64.b64encode(buffer).decode("utf-8")  
-    
-    except Exception as e:
-        print(f"❌ Error encoding face image: {e}")
+        with open(file_name, "r") as stream:
+            config = yaml.safe_load(stream)
+            logging.info("✅ YAML Configuration Loaded Successfully")
+            return config
+    except yaml.YAMLError as exc:
+        logging.error(f"❌ Error loading YAML: {exc}")
         return None
+
+
+# ✅ Convert Image Frame to Base64
+def frame_to_base64(frame):
+    try:
+        _, buffer = cv2.imencode(".jpg", frame)
+        return base64.b64encode(buffer).decode("utf-8")
+    except Exception as e:
+        logging.error(f"❌ Error encoding frame to Base64: {e}")
+        return None
+
 
 # ✅ Process Stream with Tracking and ROI-based Detection
 def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
-    """
-    Process video frames using SCRFD, but detect faces **only within the ROI**.
-    """
-    x1_roi, y1_roi, x2_roi, y2_roi = roi  # Extract ROI coordinates
-    COLORS = np.random.randint(0, 255, size=(100, 3), dtype="uint8")
+    logging.info("🚀 Starting Face Detection and Tracking Process...")
+
+    x1_roi, y1_roi, x2_roi, y2_roi = roi
+    logging.debug(f"📌 ROI Coordinates: x1={x1_roi}, y1={y1_roi}, x2={x2_roi}, y2={y2_roi}")
 
     API_ENDPOINT = "http://0.0.0.0:8080/api/v1/fd/event"
     KAFKA_TOPIC = "face_detection"
-    CONFIDENCE_THRESHOLD = 0.60  
+    CONFIDENCE_THRESHOLD = 0.70  
 
+    logging.info("🛠 Loading Tracker Configuration")
+    tracker_config = load_config("/home/heramb/gvd_clarify_ops/face_utils/face_tracking/config/config_tacking.yaml")
+
+    if tracker_config is None:
+        logging.error("❌ Failed to load tracker configuration. Exiting.")
+        return
+
+    tracker = BYTETracker(args=tracker_config, frame_rate=30)
+    logging.info("✅ BYTETracker Initialized")
+
+    frame_id = 0
+    fps = -1
+
+    # ✅ Store processed tracking IDs to avoid duplicate payloads
     alerted_track_ids = set()
-    TRACKING_BUFFER = {}  # Store recent face positions for tracking stability
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            base.logging.error("❌ Stream capture failed")
+            logging.error("❌ Stream capture failed")
             break
 
         frame = cv2.resize(frame, (640, 480))
-        copied_frame = frame.copy()
+        logging.debug("📷 Frame captured and resized to 640x480")
+
+        # ✅ Capture Full Frame for Payload
+        full_frame_base_image = frame_to_base64(frame)
 
         # ✅ Draw ROI Bounding Box
-        cv2.rectangle(frame, (x1_roi, y1_roi), (x2_roi, y2_roi), (255, 0, 0), 2)  
+        cv2.rectangle(frame, (x1_roi, y1_roi), (x2_roi, y2_roi), (255, 0, 0), 2)
 
-        # ✅ Extract ROI from the frame
-        roi_frame = frame[y1_roi:y2_roi, x1_roi:x2_roi].copy()
+        # ✅ Run Face Detection
+        logging.info("🔍 Running Face Detection...")
+        try:
+            detections, img_info, bboxes, landmarks = ai_model.detect_tracking(image=frame, thresh=0.5)
+        except Exception as e:
+            logging.error(f"❌ Face Detection Error: {e}")
+            continue
 
-        # ✅ Run SCRFD Face Detection on **ROI only**
-        detections, img_info, bboxes, _ = ai_model.detect_tracking(image=roi_frame, thresh=0.5)
+        if bboxes is not None and len(bboxes) > 0:
+            logging.info(f"📌 Before Tracker Update - bboxes dtype: {bboxes.dtype}, shape: {bboxes.shape}")
 
-        for i in range(len(bboxes)):
             try:
-                # ✅ Extract bounding box coordinates and track ID (adjusting to full frame coordinates)
-                x1, y1, x2, y2, track_id = map(int, bboxes[i])
-                x1, x2 = x1 + x1_roi, x2 + x1_roi
-                y1, y2 = y1 + y1_roi, y2 + y1_roi
+                # ✅ Convert to NumPy if needed
+                if not isinstance(bboxes, np.ndarray):
+                    bboxes = np.array(bboxes, dtype=np.float32)
 
-                # ✅ Extract confidence score
-                confidence_score = detections[i][-1].item()
-                conf = int(float(confidence_score) * 100)  # Convert to percentage
+                if len(bboxes.shape) == 1:  # If only one detection, reshape
+                    bboxes = bboxes.reshape(1, -1)
 
-                # ✅ Stabilize tracking using a buffer
-                if track_id in TRACKING_BUFFER:
-                    prev_x1, prev_y1, prev_x2, prev_y2 = TRACKING_BUFFER[track_id]
-                    if abs(prev_x1 - x1) < 15 and abs(prev_y1 - y1) < 15:  # Small movement allowed
-                        track_id = track_id  # Keep the same ID
-                    else:
-                        track_id = int(track_id)  # Reset tracking if large displacement detected
-                TRACKING_BUFFER[track_id] = (x1, y1, x2, y2)  # Store latest position
+                # ✅ Ensure correct format for BYTETracker
+                online_targets = tracker.update(
+                    torch.tensor(bboxes, dtype=torch.float32),
+                    [int(img_info["height"]), int(img_info["width"])], (128, 128)
+                )
 
-                # ✅ Check if Face is Fully Inside ROI & Confidence > Threshold
-                if conf > CONFIDENCE_THRESHOLD and track_id not in alerted_track_ids:
-                    # ✅ Properly Crop the Face with Padding
-                    face_base64 = encode_face_to_base64(copied_frame, x1, y1, x2, y2, padding=30)
+                online_tlwhs = []
+                online_ids = []
+                online_scores = []
 
-                    if face_base64:
+                for t in online_targets:
+                    tlwh = t.tlwh
+                    tid = t.track_id
+                    vertical = tlwh[2] / tlwh[3] > tracker_config["aspect_ratio_thresh"]
+                    if tlwh[2] * tlwh[3] > tracker_config["min_box_area"] and not vertical:
+                        online_tlwhs.append(tlwh)
+                        online_ids.append(tid)
+                        online_scores.append(t.score)
+
+                logging.debug(f"🎯 Tracked Faces: {online_ids}")
+
+                # ✅ Draw bounding boxes and IDs
+                online_im = plot_tracking(
+                    img_info["raw_img"],
+                    online_tlwhs,
+                    online_ids,
+                    frame_id=frame_id + 1,
+                    fps=fps,
+                )
+
+                # ✅ Send each face as a separate payload
+                for idx, tid in enumerate(online_ids):
+                    if tid in alerted_track_ids:
+                        continue  # ✅ Skip already processed tracking IDs
+
+                    bbox = bboxes[idx]
+                    if len(bbox) >= 4:
+                        x1, y1, x2, y2 = map(int, bbox[:4])
+                        score = float(detections[idx][-1])  # Extract confidence score
+
+                        # ✅ Extract Face Frame Without Bounding Box
+                        cropped_face = frame[y1:y2, x1:x2]
+                        face_detected_frame = frame_to_base64(cropped_face)
+
                         payload = {
-                            "cam_name": cam_name,
                             "cam_id": cam_id,
-                            "alert_frame": face_base64,  
+                            "cam_name": cam_name,
+                            # "alert_frame": full_frame_base_image,  # Kept in comment as per previous code
+                            "face_frame": face_detected_frame
                         }
 
-                        # ✅ Send Data to API Endpoint
+                        # ✅ Push to Kafka
                         try:
-                            response = requests.post(API_ENDPOINT, json=payload)
-                            if response.status_code != 200:
-                                base.logging.error(f"❌ API Error: {response.status_code} - {response.text}")
+                            producer.send(KAFKA_TOPIC, json.dumps(payload).encode("utf-8"))
+                            logging.info(f"✅ Payload sent to Kafka for Tracking ID: {tid}")
                         except Exception as e:
-                            base.logging.error(f"❌ Failed to send data to API: {e}")
+                            logging.error(f"❌ Kafka Push Error: {e}")
 
-                        # ✅ Publish to Kafka Topic
+                        # ✅ Push to API
                         try:
-                            producer.produce(KAFKA_TOPIC, json.dumps(payload).encode("utf-8"))
-                            producer.flush()
-                        except Exception as kafka_ex:
-                            base.logging.error(f"❌ Kafka Error: {kafka_ex}")
+                            response = requests.post(API_ENDPOINT, json=payload, headers={"Content-Type": "application/json"})
+                            if response.status_code == 200:
+                                logging.info(f"✅ Payload successfully sent to API for Tracking ID: {tid}")
+                            else:
+                                logging.error(f"❌ API Push Error: {response.status_code} - {response.text}")
+                        except Exception as e:
+                            logging.error(f"❌ API Push Exception: {e}")
 
-                        # ✅ Mark as Alerted
-                        alerted_track_ids.add(track_id)
-
-                # ✅ Draw Bounding Box with Track ID
-                color = [int(c) for c in COLORS[track_id % len(COLORS)]]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                label = f"ID {track_id} ({conf}%)"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                        # ✅ Mark tracking ID as processed
+                        alerted_track_ids.add(tid)
 
             except Exception as e:
-                base.logging.error(f"❌ Error processing face detection: {e}")
+                logging.error(f"❌ Error in Tracking Update: {e}")
                 continue
 
-        # ✅ Stream processed frame to RTMP
         if out:
-            out.write(frame)
+            out.write(online_im)
 
-        # ✅ Show the inference window
-        cv2.imshow("Face Detection (SCRFD)", frame)
-        if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
+        cv2.imshow("Face Tracking (BYTETracker)", online_im)
+        if cv2.waitKey(1) & 0xFF == 27:
             break
+
+        frame_id += 1
 
     cap.release()
     out.release()
@@ -143,33 +200,33 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
 
 
+
 # ✅ Main Process
 def main(rtsp, rtmp, cam_name, cam_id, roi, model_path):
-    producer = None
     try:
-        # Setup Kafka Producer
+        logging.info("🚀 Initializing Kafka Producer...")
         producer = base.get_kafka_producer()
+        logging.info("✅ Kafka Producer Initialized")
+
         if model_path == "fd":
             MODEL_PATH = os.getenv('FD_PATH')
+            logging.info(f"✅ Model Path Resolved: {MODEL_PATH}")
 
-        # Load The Model with GPU Acceleration
         ai_model = load_scrfd_model(MODEL_PATH)
 
-        # Setup Live Capture
+        logging.info("🎥 Initializing Video Capture...")
         cap = base.initialize_capture(rtsp_url=rtsp)
         if cap is None:
-            base.logging.error(f"❌ Exiting: Unable to open RTSP stream for camera {cam_name} (ID: {cam_id})")
+            logging.error(f"❌ Unable to open RTSP stream for {cam_name} (ID: {cam_id})")
             return
 
-        # Setup Live for RTMP streaming
         out = base.setup_live_broadcasting(rtmp_url=rtmp)
 
-        # Process Frames and Stream to RTMP
         process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer)
-        base.logging.info("Processing and streaming completed.")
+        logging.info("✅ Processing and Streaming Completed")
 
     except Exception as e:
-        base.logging.error(f"Error in main system: {e}")
+        logging.error(f"❌ Error in main system: {e}")
 
 if __name__ == "__main__":
     parser = base.argparse.ArgumentParser(description="Real-time Face Detection with ROI and Tracking (SCRFD, RTSP, RTMP)")
