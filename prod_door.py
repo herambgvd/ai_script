@@ -37,18 +37,19 @@ def draw_corner_rect(img, x1, y1, x2, y2, color=(0, 255, 0), thickness=2, corner
 # ✅ Process Stream and Broadcast Inference
 def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
     """
-    Process video frames to detect and track objects within the defined ROI, stream to RTMP, 
-    and generate payloads with tracking data (ensuring only one alert per tracking ID).
+    Process video frames to detect "Door-Open" and "Door-Close" states within the ROI,
+    stream to RTMP, and generate an alert only when the door opens.
     """
     x1_roi, y1_roi, x2_roi, y2_roi = roi  # Extract ROI coordinates
-    COLORS = np.random.randint(0, 255, size=(80, 3), dtype="uint8")  # Define bounding box colors
+    API_ENDPOINT = "http://0.0.0.0:8080/api/v1/door/event"  # Replace with actual API endpoint
+    KAFKA_TOPIC = "door"
+    CONFIDENCE_THRESHOLD = 0.70  # ✅ Only send an alert if confidence > 70%
 
-    API_ENDPOINT = "http://0.0.0.0:8080/api/v1/box/event"  # Replace with actual API endpoint
-    KAFKA_TOPIC = "box"
-    CONFIDENCE_THRESHOLD = 0.70  # ✅ Send alert only if confidence > 70%
+    # ✅ Class mappings for Door Open/Close
+    CLASS_LABELS = {0: "Door-Open", 1: "Door-Close"}  # Adjust index as per your model's output
 
-    # ✅ Track alerted IDs to avoid duplicate alerts
-    alerted_track_ids = set()
+    # ✅ Flag to track the door state (Initially assumed closed)
+    door_open = False
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -56,6 +57,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
             base.logging.error("❌ Stream capture failed at frame")
             break
 
+        # ✅ Resize frame to 640x480 for processing
         frame = cv2.resize(frame, (640, 480))
 
         # ✅ Draw ROI Bounding Box on Full Frame
@@ -64,72 +66,80 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
         # ✅ Extract ROI region for processing
         roi_frame = frame[y1_roi:y2_roi, x1_roi:x2_roi].copy()
 
-        # ✅ Run YOLO detection with tracking enabled
-        results = ai_model.track(roi_frame, persist=True, verbose=False)
+        # ✅ Run YOLO detection
+        results = ai_model(roi_frame, verbose=False)  # Run inference
+        detected_label = None  # Track the detected class
 
-        # ✅ Track current IDs in the frame
-        current_track_ids = set()
-
-        # ✅ Process detected objects
-        if results and len(results[0].boxes) > 0:
+        # ✅ Ensure results[0] exists and has boxes
+        if results and hasattr(results[0], 'boxes') and results[0].boxes is not None:
             for box in results[0].boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])  # Get bounding box coordinates
-                conf = box.conf[0].item()  # Confidence score
-                cls = int(box.cls[0].item())  # Class index
-                track_id = int(box.id[0].item()) if box.id is not None else None  # Tracking ID
+                conf = float(box.conf[0])  # Get confidence score
+                cls = int(box.cls[0])  # Get class index
 
-                # ✅ Convert bounding box coordinates from ROI to full frame
-                x1 += x1_roi
-                y1 += y1_roi
-                x2 += x1_roi
-                y2 += y1_roi
+                if cls in CLASS_LABELS and conf > CONFIDENCE_THRESHOLD:
+                    detected_label = CLASS_LABELS[cls]
 
-                # ✅ Track IDs currently detected
-                if track_id is not None:
-                    current_track_ids.add(track_id)
+                    # ✅ Draw bounding box on the main frame (not just ROI)
+                    cv2.rectangle(
+                        frame, 
+                        (x1_roi + x1, y1_roi + y1), 
+                        (x1_roi + x2, y1_roi + y2), 
+                        (0, 255, 0), 2
+                    )
 
-                # Assign a color to each class
-                color = [int(c) for c in COLORS[cls % len(COLORS)]]
+                    # ✅ Display class label
+                    cv2.putText(
+                        frame,
+                        f"{detected_label} ({conf*100:.1f}%)",
+                        (x1_roi + x1, y1_roi + y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,  # Font scale
+                        (0, 255, 0) if detected_label == "Door-Open" else (0, 0, 255),  # Green for open, red for close
+                        2,  # Thickness
+                        cv2.LINE_AA
+                    )
+                    break  # Only process the first valid detection
 
-                # ✅ Draw only corner rectangles
-                draw_corner_rect(frame, x1, y1, x2, y2, color)
+        # ✅ Add "Door Status" text at the top-left of the frame
+        cv2.putText(
+            frame,
+            f"Door Status: {detected_label or 'Close'}",
+            (20, 40),  # Position at the top-left
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,  # Font scale
+            (0, 255, 0) if detected_label == "Door-Open" else (0, 0, 255),  # Green for open, red for close
+            2,  # Thickness
+            cv2.LINE_AA
+        )
 
-                # ✅ Draw tracking ID and confidence score
-                label = f"ID {track_id} | {ai_model.names[cls]}: {conf:.2f}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # ✅ If the detected class is "Door-Open" and was previously closed, send an alert
+        if detected_label == "Door-Open" and not door_open:
+            base.logging.info("🚪 Door Open Detected! Sending alert...")
+            
+            # Prepare payload
+            payload = {
+                "camera_id": cam_id,
+                "camera_name": cam_name,
+                "status": "open",
+                "alert_frame": encode_frame_to_base64(frame)
+            }
 
-                # ✅ Send alert **ONLY IF confidence > 70% and tracking ID has not been alerted**
-                if track_id is not None and conf > CONFIDENCE_THRESHOLD and track_id not in alerted_track_ids:
-                    # ✅ Convert Full Frame to Base64
-                    full_frame_base64 = encode_frame_to_base64(frame)
+            # ✅ Send to Kafka
+            producer.send(KAFKA_TOPIC, json.dumps(payload).encode("utf-8"))
 
-                    # ✅ Prepare Payload
-                    payload = {
-                        "cam_name": cam_name,
-                        "cam_id": cam_id,
-                        "alert_frame": full_frame_base64
-                    }
+            # ✅ Send to API
+            try:
+                requests.post(API_ENDPOINT, json=payload, timeout=5)
+            except requests.exceptions.RequestException as e:
+                base.logging.error(f"❌ API request failed: {e}")
 
-                    # ✅ Send Data to API Endpoint
-                    try:
-                        response = requests.post(API_ENDPOINT, json=payload)
-                        if response.status_code != 200:
-                            base.logging.error(f"❌ API Error: {response.status_code} - {response.text}")
-                    except Exception as e:
-                        base.logging.error(f"❌ Failed to send data to API: {e}")
+            door_open = True  # Update state to avoid duplicate alerts
 
-                    # ✅ Publish to Kafka Topic
-                    try:
-                        producer.produce(KAFKA_TOPIC, json.dumps(payload).encode("utf-8"))
-                        producer.flush()
-                    except Exception as kafka_ex:
-                        base.logging.error(f"❌ Kafka Error: {kafka_ex}")
-
-                    # ✅ Add this tracking ID to the set (Avoid duplicate alerts)
-                    alerted_track_ids.add(track_id)
-
-        # ✅ Reset tracking IDs if they disappear from the frame
-        alerted_track_ids.intersection_update(current_track_ids)
+        # ✅ If "Door-Close" is detected, reset flag
+        if detected_label == "Door-Close" and door_open:
+            base.logging.info("🚪 Door Closed Detected.")
+            door_open = False  # Reset state
 
         # ✅ Stream processed frame to RTMP
         if out:
@@ -143,6 +153,9 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
     cap.release()
     out.release()
     cv2.destroyAllWindows()
+
+
+
 
 # ✅ Main Process
 def main(rtsp, rtmp, cam_name, cam_id, roi, model_path):

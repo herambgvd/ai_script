@@ -1,2 +1,4 @@
 env/
 .env
+models/
+face_utils/face_tracking/pretrained/bytetrack_s_mot17.pth.tar

@@ -2,124 +2,120 @@ import base
 import json
 import requests
 import base64
+import numpy as np
 
-# ✅ Function to Convert Cropped Fire/Smoke Region to Base64
-def encode_image_to_base64(frame, x1, y1, x2, y2):
-    """Crops the detected region and encodes it to base64."""
+# ✅ Function to Convert Full Image Frame to Base64
+def encode_frame_to_base64(frame):
+    """Encodes the full frame to base64 format."""
     try:
-        cropped_region = frame[y1:y2, x1:x2]
-        _, buffer = base.cv2.imencode('.jpg', cropped_region)
+        _, buffer = base.cv2.imencode('.jpg', frame)
         return base64.b64encode(buffer).decode('utf-8')
     except Exception as e:
-        base.logging.error(f"❌ Error encoding image: {e}")
+        base.logging.error(f"❌ Error encoding full frame: {e}")
         return None  # Return None if encoding fails
 
-# ✅ Process Stream and Broadcast Inference
+# ✅ Process Stream and Broadcast Inference (Tracking-Based Alerts)
 def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
     """
-       Process video frames to detect and track objects, stream to RTMP, and generate payloads for non-compliance.
-       Fire and smoke detections trigger an alert sent to an API endpoint and a Kafka topic.
+    Detect fire/smoke in ROI and send alerts, ensuring each tracking ID triggers only one alert.
     """
     base.logging.info(f"📌 Starting inference for Camera: {cam_name} (ID: {cam_id})")
 
-    # Define Fire & Smoke Class Indices and Confidence Thresholds
-    FIRE_CLASS_INDEX = 0   # Adjust as per your model
-    SMOKE_CLASS_INDEX = 1  # Adjust as per your model
+    # Fire & Smoke Class Indices and Confidence Thresholds
+    FIRE_CLASS_INDEX = 0  
+    SMOKE_CLASS_INDEX = 1  
     CONFIDENCE_THRESHOLD_FIRE = 0.55
     CONFIDENCE_THRESHOLD_SMOKE = 0.75
 
     # Fire Alert API Endpoint
-    FIRE_ALERT_API = "http://0.0.0.0:8080/fire/event"
+    FIRE_ALERT_API = "http://0.0.0.0:8080/api/v1/fire/event"
 
-    # Starting Inference
+    # ✅ Track alerted IDs to avoid duplicate alerts
+    alerted_track_ids = set()
+
     while True:
         ret, frame = cap.read()
         if not ret:
             base.logging.error("❌ Stream capture failed at frame")
-            error_msg = f"Stream capture failed for camera {cam_name}"
-            if producer:
-                try:
-                    producer.produce("notifications", error_msg)
-                    producer.flush()
-                except Exception as kafka_ex:
-                    base.logging.error(f"❌ Failed to produce error message to Kafka: {kafka_ex}")
             break
-        
+
         try:
-            # Resize frame for processing
             frame = base.cv2.resize(frame, (640, 480))
 
-            # Perform inference
-            results = ai_model.track(frame, persist=True, verbose=False)
+            # ✅ Extract ROI coordinates
+            roi_x1, roi_y1, roi_x2, roi_y2 = roi[:4]
 
-            # Bounding Boxes
-            try:
-                fire_detected = False
-                fire_alert_payload = None
+            # ✅ Draw ROI bounding box on full frame
+            base.cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (255, 0, 0), 2)  # Blue box
 
-                if results[0].boxes.id is not None:
-                    track_ids = results[0].boxes.id.cpu().numpy()  
-                    detections = results[0].boxes.data.cpu().numpy()
+            # ✅ Crop the frame to the ROI region for inference
+            roi_frame = frame[roi_y1:roi_y2, roi_x1:roi_x2]
 
-                    for i, row in enumerate(detections):
-                        x1, y1, x2, y2 = map(int, row[:4])  
-                        conf = float(row[5])  
-                        cls = int(row[6])  
-                        track_id = int(track_ids[i])
+            # ✅ Perform inference ONLY on the ROI
+            results = ai_model.track(roi_frame, persist=True, verbose=False)
 
-                        # ✅ Fire & Smoke Detection Logic
-                        if (cls == FIRE_CLASS_INDEX and conf > CONFIDENCE_THRESHOLD_FIRE) or \
-                           (cls == SMOKE_CLASS_INDEX and conf > CONFIDENCE_THRESHOLD_SMOKE):
+            fire_detected = False
+            fire_alert_payload = None
+            current_track_ids = set()
+
+            if results[0].boxes.id is not None:
+                track_ids = results[0].boxes.id.cpu().numpy()  
+                detections = results[0].boxes.data.cpu().numpy()
+
+                for i, row in enumerate(detections):
+                    x1, y1, x2, y2 = map(int, row[:4])  # Bounding box (in cropped ROI)
+                    conf = float(row[5])  
+                    cls = int(row[6])  
+                    track_id = int(track_ids[i])
+
+                    # ✅ Convert bounding box coordinates from ROI to full frame
+                    x1, x2 = x1 + roi_x1, x2 + roi_x1
+                    y1, y2 = y1 + roi_y1, y2 + roi_y1
+
+                    # ✅ Track current IDs in the frame
+                    current_track_ids.add(track_id)
+
+                    # ✅ Fire & Smoke Detection Logic (Restricted to ROI)
+                    if (cls == FIRE_CLASS_INDEX and conf > CONFIDENCE_THRESHOLD_FIRE) or \
+                       (cls == SMOKE_CLASS_INDEX and conf > CONFIDENCE_THRESHOLD_SMOKE):
+
+                        # ✅ Send alert **ONLY IF the tracking ID has not been alerted**
+                        if track_id not in alerted_track_ids:
                             fire_detected = True
                             label = "🔥 Fire" if cls == FIRE_CLASS_INDEX else "💨 Smoke"
                             base.cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red for fire/smoke
                             base.cv2.putText(frame, label, (x1, y1 - 5), base.cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-                            # Convert Detected Region to Base64
-                            base64_image = encode_image_to_base64(frame, x1, y1, x2, y2)
+                            # ✅ Convert Full Frame to Base64
+                            full_frame_base64 = encode_frame_to_base64(frame)
 
-                            # Fire Alert Payload
+                            # ✅ Fire Alert Payload
                             fire_alert_payload = {
-                                "camera_id": cam_id,
-                                "camera_name": cam_name,
-                                "detection": label,
-                                "confidence": conf,
-                                "bounding_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                                "timestamp": base.datetime.now().isoformat(),
-                                "image_base64": base64_image  # ✅ Add base64 image
+                                "cam_id": cam_id,
+                                "cam_name": cam_name,
+                                "alert_frame": full_frame_base64  # ✅ Attach full frame image
                             }
 
-                        # ✅ Person Tracking Logic
-                        if cls == 0:  # Only track persons
-                            label = f'{track_id}'
-                            base.cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green for persons
-                            base.cv2.putText(frame, label, (x1, y1 - 5), base.cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            # ✅ Add this tracking ID to the set (Avoid duplicate alerts)
+                            alerted_track_ids.add(track_id)
 
-                # ✅ Send Fire Alert if Fire/Smoke Detected
-                if fire_detected:
-                    try:
-                        # Send Alert to API
-                        response = requests.post(FIRE_ALERT_API, json=fire_alert_payload, timeout=5)
-                        base.logging.info(f"🔥 Fire alert sent to API: {response.status_code}")
+            # ✅ Reset tracking IDs if they disappear from the frame
+            alerted_track_ids.intersection_update(current_track_ids)
 
-                        # Send Alert to Kafka
-                        if producer:
-                            producer.produce("fire_alerts", json.dumps(fire_alert_payload))
-                            producer.flush()
-                            base.logging.info(f"🔥 Fire alert sent to Kafka")
-                    except Exception as alert_ex:
-                        base.logging.error(f"❌ Failed to send fire alert: {alert_ex}")
+            # ✅ Send Fire Alert if Fire/Smoke Detected
+            if fire_detected:
+                try:
+                    # Send Alert to API
+                    response = requests.post(FIRE_ALERT_API, json=fire_alert_payload, timeout=5)
+                    base.logging.info(f"🔥 Fire alert sent to API: {response.status_code}")
 
-            except Exception as e:
-                base.logging.error(f"❌ Error during inference: {e}")
-                error_msg = f"Inference error in camera {cam_name}: {e}"
-                if producer:
-                    try:
-                        producer.produce("notifications", error_msg)
+                    # Send Alert to Kafka
+                    if producer:
+                        producer.produce("fire_alerts", json.dumps(fire_alert_payload))
                         producer.flush()
-                    except Exception as kafka_ex:
-                        base.logging.error(f"❌ Failed to produce error message to Kafka: {kafka_ex}")
-                continue
+                        base.logging.info(f"🔥 Fire alert sent to Kafka")
+                except Exception as alert_ex:
+                    base.logging.error(f"❌ Failed to send fire alert: {alert_ex}")
 
             # ✅ Broadcast processed frame to RTMP
             out.write(frame)
@@ -131,69 +127,48 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                 break
         except Exception as e:
             base.logging.error(f"❌ Unexpected error: {e}")
-            error_msg = f"Unexpected error in camera {cam_name}: {e}"
-            if producer:
-                try:
-                    producer.produce("notifications", error_msg)
-                    producer.flush()
-                except Exception as kafka_ex:
-                    base.logging.error(f"❌ Failed to produce error message to Kafka: {kafka_ex}")
             continue
-    
+
     cap.release()
     out.release()
     base.cv2.destroyAllWindows()
 
-
-
-def main(rtsp, rtmp, cam_name, cam_id, roi,model_path):
+# ✅ Main Function
+def main(rtsp, rtmp, cam_name, cam_id, roi, model_path):
     producer = None
     try:
-        # Setup Kafka Producer
+        # ✅ Setup Kafka Producer
         producer = base.get_kafka_producer()
 
-        # Load The Model
+        # ✅ Load The Model
         ai_model = base.load_custom_model(model_path)
 
-        # Setup Live Capture
+        # ✅ Setup Live Capture
         cap = base.initialize_capture(rtsp_url=rtsp)
-        if cap is None:  # 🚀 Stop execution if RTSP stream failed
+        if cap is None:
             base.logging.error(f"❌ Exiting: Unable to open RTSP stream for camera {cam_name} (ID: {cam_id})")
             return
 
-        # Setup Live for RTMP streaming
+        # ✅ Setup Live RTMP Streaming
         out = base.setup_live_broadcasting(rtmp_url=rtmp)
 
-        # Process Frames and Stream to RTMP
+        # ✅ Process Stream & Perform Inference
         process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer)
         base.logging.info("Processing and streaming completed.")
-    
+
     except Exception as e:
         base.logging.error(f"Error in main system: {e}")
-        error_msg = f"Main system error in camera {cam_name}: {e}"
-        if producer:
-            try:
-                producer.produce("notifications", error_msg)
-                producer.flush()
-            except Exception as kafka_ex:
-                base.logging.error(f"❌ Failed to produce error message to Kafka: {kafka_ex}")
 
-
-parser = base.argparse.ArgumentParser(description="Person Entry-Exit Detection using YOLOv8 and RTSP to RTMP Streaming")
+# ✅ Argument Parser
+parser = base.argparse.ArgumentParser(description="Fire and Smoke Detection within ROI (RTSP to RTMP Streaming)")
 parser.add_argument("--rtmp", type=str, required=True, help="RTMP output URL for broadcasting")
 parser.add_argument("--rtsp", type=str, required=True, help="RTSP URL of the camera")
 parser.add_argument("--cam_name", type=str, required=True, help="Camera Name")
 parser.add_argument("--cam_id", type=str, required=True, help="Camera ID")
-parser.add_argument("--roi", type=int, nargs=4, required=True, help="Entry ROI in format x1 y1 x2 y2 x3 y3 x4 y4")
+parser.add_argument("--roi", type=int, nargs=4, required=True, help="ROI in format x1 y1 x2 y2")
 parser.add_argument("--model_path", type=str, required=True, help="Custom Model Path")
 args = parser.parse_args()
 
+# ✅ Run Main
 if __name__ == "__main__":
-    main(
-        rtsp=args.rtsp,
-        rtmp=args.rtmp,
-        cam_name=args.cam_name,
-        cam_id=args.cam_id,
-        roi=args.roi,
-        model_path=args.model_path
-    )
+    main(rtsp=args.rtsp, rtmp=args.rtmp, cam_name=args.cam_name, cam_id=args.cam_id, roi=args.roi, model_path=args.model_path)

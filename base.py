@@ -60,10 +60,22 @@ def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
     """
     Initialize RTSP video capture using GStreamer.
     - If GStreamer fails, it optionally falls back to FFMPEG.
+    - Allows direct webcam access if `rtsp_url` is 0.
     - Retries multiple times before failing.
     """
     logging.info("Initializing video capture...")
-    
+
+    # ✅ Check if using Webcam instead of RTSP
+    if str(rtsp_url) == "0":
+        logging.info("🎥 Using Webcam (cv2.VideoCapture(0))")
+        cap = cv2.VideoCapture(0)  # Direct webcam access
+        if cap.isOpened():
+            logging.info("✅ Webcam initialized successfully.")
+            return cap
+        else:
+            logging.error("❌ Failed to initialize webcam!")
+            return None
+
     # ✅ Ensure RTSP URL is properly formatted
     parsed_url = urllib.parse.urlparse(rtsp_url)
     username, password = parsed_url.username, parsed_url.password
@@ -112,6 +124,7 @@ def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
     logging.error("❌ RTSP stream failed to open after all retries using both GStreamer and FFMPEG!")
     return None  # Return None if all attempts fail
 
+
 # ✅ GStreamer Pipeline for RTMP Broadcasting
 def setup_live_broadcasting(rtmp_url):
     try:
@@ -131,6 +144,12 @@ def load_custom_model(model_path):
         logging.info("Loading YOLO model...")
         if model_path == "fire":
             MODEL_PATH = os.getenv('FIRE_PATH')
+        if model_path == "box":
+            MODEL_PATH = os.getenv('BOX_PATH')
+        if model_path == "fd":
+            MODEL_PATH = os.getenv('FACE_PATH')
+        if model_path == "door":
+            MODEL_PATH = os.getenv('DOOR_PATH')
 
         ai_model = YOLO(MODEL_PATH, task="detect")
         logging.info("✅ Model loaded successfully.")

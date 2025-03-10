@@ -113,7 +113,8 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                                     # Mark this ID as alerted
                                     intruded_ids.add(track_id)
                 else:
-                    base.logging.warning("⚠️ No valid detection results available.")
+                    # base.logging.warning("⚠️ No valid detection results available.")
+                    pass
 
             except Exception as e:
                 base.logging.error(f"❌ Error during inference: {e}")
