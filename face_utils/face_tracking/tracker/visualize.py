@@ -58,7 +58,7 @@ def plot_tracking(
     # text_thickness = 2
     # line_thickness = max(1, int(image.shape[1] / 500.))
     text_scale = 2
-    text_thickness = 2
+    text_thickness = 1
     line_thickness = 3
 
     radius = max(5, int(im_w / 140.0))

@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 
 # ✅ Function to Convert Cropped Face to Base64
-def encode_face_to_base64(frame, x1, y1, x2, y2, padding=20, target_size=(128, 128)):
+def encode_face_to_base64(frame, x1, y1, x2, y2, padding=30, target_size=(216,216)):
     """Crops the detected face region with padding, resizes to a fixed size, and encodes it to base64."""
     try:
         # Get frame dimensions
@@ -50,7 +50,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
     API_ENDPOINT = "http://0.0.0.0:8080/api/v1/fd/event"  # Replace with actual API endpoint
     KAFKA_TOPIC = "face_detection"
-    CONFIDENCE_THRESHOLD = 0.80  # ✅ Send alert only if confidence > 70%
+    CONFIDENCE_THRESHOLD = 0.85  # ✅ Send alert only if confidence > 70%
 
     # ✅ Track alerted IDs to avoid duplicate alerts
     alerted_track_ids = set()
@@ -98,7 +98,8 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
                     # ✅ Draw bounding box and tracking info
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    label = f"ID {track_id} ({conf:.2f})"
+                    # label = f"ID {track_id} ({conf:.2f})"
+                    label = f"{track_id}"
                     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
                     # ✅ Check if face is fully inside ROI and confidence > 70%
@@ -107,23 +108,23 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                         track_id not in alerted_track_ids
                     ):
                         # ✅ Convert Detected Face to Base64
-                        face_base64 = encode_face_to_base64(copied_frame, x1, y1, x2, y2, padding=20, target_size=(128, 128))
+                        face_base64 = encode_face_to_base64(copied_frame, x1, y1, x2, y2, padding=30, target_size=(216, 216))
 
                         if face_base64:  # Ensure face image was properly encoded
                             # ✅ Prepare Payload
                             payload = {
                                 "cam_name": cam_name,
                                 "cam_id": cam_id,
-                                "alert_frame": face_base64,  # ✅ Sending only the face image
+                                "face_frame": face_base64,  # ✅ Sending only the face image
                             }
 
-                            # ✅ Send Data to API Endpoint
-                            try:
-                                response = requests.post(API_ENDPOINT, json=payload)
-                                if response.status_code != 200:
-                                    base.logging.error(f"❌ API Error: {response.status_code} - {response.text}")
-                            except Exception as e:
-                                base.logging.error(f"❌ Failed to send data to API: {e}")
+                            # # ✅ Send Data to API Endpoint
+                            # try:
+                            #     response = requests.post(API_ENDPOINT, json=payload)
+                            #     if response.status_code != 200:
+                            #         base.logging.error(f"❌ API Error: {response.status_code} - {response.text}")
+                            # except Exception as e:
+                            #     base.logging.error(f"❌ Failed to send data to API: {e}")
 
                             # ✅ Publish to Kafka Topic
                             try:

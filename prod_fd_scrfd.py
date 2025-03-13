@@ -21,9 +21,12 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 def load_scrfd_model(model_path):
     logging.info("🚀 Loading SCRFD model...")
     scrfd = SCRFD(model_file=model_path)
-    scrfd.prepare(ctx_id=0, input_size=(640, 640))  
-    logging.info("✅ SCRFD Model Loaded with Tracking Enabled")
+    # ✅ Ensure correct input size (Fix shape mismatch)
+    scrfd.prepare(ctx_id=0, input_size=(640, 640), providers=['CUDAExecutionProvider'])  
+    
+    logging.info("✅ SCRFD Model Loaded with Correct Input Shape")
     return scrfd
+
 
 
 # ✅ Load Tracking Configuration
@@ -85,14 +88,16 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
         frame = cv2.resize(frame, (640, 480))
         logging.debug("📷 Frame captured and resized to 640x480")
 
+        # ✅ Default `online_im` to current frame to prevent uninitialized variable issue
+        online_im = frame.copy()
+
         # ✅ Capture Full Frame for Payload
         full_frame_base_image = frame_to_base64(frame)
 
         # ✅ Draw ROI Bounding Box
-        cv2.rectangle(frame, (x1_roi, y1_roi), (x2_roi, y2_roi), (255, 0, 0), 2)
+        cv2.rectangle(online_im, (x1_roi, y1_roi), (x2_roi, y2_roi), (255, 0, 0), 2)
 
         # ✅ Run Face Detection
-        logging.info("🔍 Running Face Detection...")
         try:
             detections, img_info, bboxes, landmarks = ai_model.detect_tracking(image=frame, thresh=0.5)
         except Exception as e:
@@ -100,8 +105,6 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
             continue
 
         if bboxes is not None and len(bboxes) > 0:
-            logging.info(f"📌 Before Tracker Update - bboxes dtype: {bboxes.dtype}, shape: {bboxes.shape}")
-
             try:
                 # ✅ Convert to NumPy if needed
                 if not isinstance(bboxes, np.ndarray):
@@ -132,54 +135,47 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                 logging.debug(f"🎯 Tracked Faces: {online_ids}")
 
                 # ✅ Draw bounding boxes and IDs
-                online_im = plot_tracking(
-                    img_info["raw_img"],
-                    online_tlwhs,
-                    online_ids,
-                    frame_id=frame_id + 1,
-                    fps=fps,
-                )
-
-                # ✅ Send each face as a separate payload
                 for idx, tid in enumerate(online_ids):
-                    if tid in alerted_track_ids:
-                        continue  # ✅ Skip already processed tracking IDs
-
                     bbox = bboxes[idx]
                     if len(bbox) >= 4:
                         x1, y1, x2, y2 = map(int, bbox[:4])
                         score = float(detections[idx][-1])  # Extract confidence score
 
+                        # ✅ Draw bounding box and tracking ID on `online_im`
+                        cv2.rectangle(online_im, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green bounding box
+                        cv2.putText(online_im, f"ID {tid} ({score:.2f})", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
                         # ✅ Extract Face Frame Without Bounding Box
                         cropped_face = frame[y1:y2, x1:x2]
                         face_detected_frame = frame_to_base64(cropped_face)
 
-                        payload = {
-                            "cam_id": cam_id,
-                            "cam_name": cam_name,
-                            # "alert_frame": full_frame_base_image,  # Kept in comment as per previous code
-                            "face_frame": face_detected_frame
-                        }
+                        if tid not in alerted_track_ids:
+                            payload = {
+                                "cam_id": cam_id,
+                                "cam_name": cam_name,
+                                "face_frame": face_detected_frame
+                            }
 
-                        # ✅ Push to Kafka
-                        try:
-                            producer.send(KAFKA_TOPIC, json.dumps(payload).encode("utf-8"))
-                            logging.info(f"✅ Payload sent to Kafka for Tracking ID: {tid}")
-                        except Exception as e:
-                            logging.error(f"❌ Kafka Push Error: {e}")
+                            # ✅ Push to Kafka
+                            try:
+                                producer.produce(KAFKA_TOPIC, json.dumps(payload).encode('utf-8'))
+                                producer.flush()
+                                logging.info(f"✅ Payload sent to Kafka for Tracking ID: {tid}")
+                            except Exception as e:
+                                logging.error(f"❌ Kafka Push Error: {e}")
 
-                        # ✅ Push to API
-                        try:
-                            response = requests.post(API_ENDPOINT, json=payload, headers={"Content-Type": "application/json"})
-                            if response.status_code == 200:
-                                logging.info(f"✅ Payload successfully sent to API for Tracking ID: {tid}")
-                            else:
-                                logging.error(f"❌ API Push Error: {response.status_code} - {response.text}")
-                        except Exception as e:
-                            logging.error(f"❌ API Push Exception: {e}")
+                            # ✅ Push to API
+                            # try:
+                            #     response = requests.post(API_ENDPOINT, json=payload, headers={"Content-Type": "application/json"})
+                            #     if response.status_code == 200:
+                            #         logging.info(f"✅ Payload successfully sent to API for Tracking ID: {tid}")
+                            #     else:
+                            #         logging.error(f"❌ API Push Error: {response.status_code} - {response.text}")
+                            # except Exception as e:
+                            #     logging.error(f"❌ API Push Exception: {e}")
 
-                        # ✅ Mark tracking ID as processed
-                        alerted_track_ids.add(tid)
+                            # ✅ Mark tracking ID as processed
+                            alerted_track_ids.add(tid)
 
             except Exception as e:
                 logging.error(f"❌ Error in Tracking Update: {e}")
