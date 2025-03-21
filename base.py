@@ -46,8 +46,7 @@ def get_kafka_producer():
 def load_model():
     try:
         logging.info("Loading YOLO model...")
-        BASE_PATH = os.getenv('BASE_PATH')
-        model_path = f'{BASE_PATH}/yolov8s.pt'
+        model_path = os.getenv('BASE_MODEL')
         ai_model = YOLO(model_path, task="detect")
         logging.info("✅ Model loaded successfully.")
         return ai_model
@@ -150,8 +149,30 @@ def load_custom_model(model_path):
             MODEL_PATH = os.getenv('FACE_PATH')
         if model_path == "door":
             MODEL_PATH = os.getenv('DOOR_PATH')
+        if model_path == "frs":
+            MODEL_PATH = os.getenv('FACE_PATH')
 
         ai_model = YOLO(MODEL_PATH, task="detect")
+        logging.info("✅ Model loaded successfully.")
+        return ai_model
+    except Exception as e:
+        logging.error(f"❌ Error loading YOLO model: {e}")
+        sys.exit(1)
+
+def load_clothing_model():
+    try:
+        logging.info("Loading YOLO model...")
+        ai_model = YOLO(os.getenv('CLOTH_PATH'), task="detect")
+        logging.info("✅ Model loaded successfully.")
+        return ai_model
+    except Exception as e:
+        logging.error(f"❌ Error loading YOLO model: {e}")
+        sys.exit(1)
+
+def load_pose_model():
+    try:
+        logging.info("Loading YOLO model...")
+        ai_model = YOLO(os.getenv('POSE_PATH'), task="detect")
         logging.info("✅ Model loaded successfully.")
         return ai_model
     except Exception as e:

@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 
 # ✅ Function to Convert Cropped Face to Base64
-def encode_face_to_base64(frame, x1, y1, x2, y2, padding=30, target_size=(512,512)):
+def encode_face_to_base64(frame, x1, y1, x2, y2, padding=20, target_size=(512,512)):
     """Crops the detected face region with padding, resizes to a fixed size, and encodes it to base64."""
     try:
         # Get frame dimensions
@@ -38,6 +38,24 @@ def encode_face_to_base64(frame, x1, y1, x2, y2, padding=30, target_size=(512,51
         print(f"❌ Error encoding face image: {e}")
         return None  # Return None if encoding fails
 
+# ✅ Function to Draw Corner Bounding Box
+def draw_corner_box(image, x1, y1, x2, y2, color=(255, 0, 0), thickness=2, corner_length=15):
+    """Draws a corner-style bounding box on the given image."""
+    # Top-left corner
+    cv2.line(image, (x1, y1), (x1 + corner_length, y1), color, thickness)
+    cv2.line(image, (x1, y1), (x1, y1 + corner_length), color, thickness)
+
+    # Top-right corner
+    cv2.line(image, (x2, y1), (x2 - corner_length, y1), color, thickness)
+    cv2.line(image, (x2, y1), (x2, y1 + corner_length), color, thickness)
+
+    # Bottom-left corner
+    cv2.line(image, (x1, y2), (x1 + corner_length, y2), color, thickness)
+    cv2.line(image, (x1, y2), (x1, y2 - corner_length), color, thickness)
+
+    # Bottom-right corner
+    cv2.line(image, (x2, y2), (x2 - corner_length, y2), color, thickness)
+    cv2.line(image, (x2, y2), (x2, y2 - corner_length), color, thickness)
 
 # ✅ Process Stream and Broadcast Inference (Face Detection)
 def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
@@ -48,9 +66,9 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
     x1_roi, y1_roi, x2_roi, y2_roi = roi  # Extract ROI coordinates
     COLORS = np.random.randint(0, 255, size=(80, 3), dtype="uint8")  # Define bounding box colors
 
-    API_ENDPOINT = "http://0.0.0.0:8080/api/v1/fd/event"  # Replace with actual API endpoint
-    KAFKA_TOPIC = "face_detection"
-    CONFIDENCE_THRESHOLD = 0.80  # ✅ Send alert only if confidence > 70%
+    API_ENDPOINT = "http://0.0.0.0:8080/api/v1/frs/event"  # Replace with actual API endpoint
+    KAFKA_TOPIC = "frs"
+    CONFIDENCE_THRESHOLD = 0.70  # ✅ Send alert only if confidence > 70%
 
     # ✅ Track alerted IDs to avoid duplicate alerts
     alerted_track_ids = set()
@@ -96,10 +114,10 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                     # ✅ Assign a color to each tracking ID
                     color = [int(c) for c in COLORS[track_id % len(COLORS)]]
 
-                    # ✅ Draw bounding box and tracking info
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    # label = f"ID {track_id} ({conf:.2f})"
-                    label = f"{track_id}"
+                    # ✅ Draw Bounding Box on the full frame
+                    draw_corner_box(frame, x1, y1, x2, y2, color=(255, 0, 0), thickness=1)
+                    label = f"ID {track_id} ({conf:.2f})"
+                    # label = f"{track_id}"
                     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
                     # ✅ Check if face is fully inside ROI and confidence > 70%
