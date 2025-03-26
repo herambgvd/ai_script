@@ -136,13 +136,13 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
             out.write(frame)
 
         # ✅ Show the inference window
-        cv2.imshow("ROI Tracking", frame)
-        if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
-            break
+        #cv2.imshow("ROI Tracking", frame)
+        #if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
+         #   break
 
     cap.release()
     out.release()
-    cv2.destroyAllWindows()
+   # cv2.destroyAllWindows()
 
 # ✅ Main Process
 def main(rtsp, rtmp, cam_name, cam_id, roi, model_path):

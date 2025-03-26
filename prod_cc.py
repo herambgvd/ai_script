@@ -135,9 +135,9 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi_entry, roi_exit, pr
 
             # ✅ Display output frame for debugging
             base.cv2.imshow("Inference", frame)
-            if base.cv2.waitKey(1) & 0xFF == 27:
-                base.logging.info("❌ User terminated the process.")
-                break
+            #if base.cv2.waitKey(1) & 0xFF == 27:
+             #   base.logging.info("❌ User terminated the process.")
+              #  break
         except Exception as e:
             base.logging.error(f"❌ Unexpected error: {e}")
             error_msg = f"Unexpected error in camera {cam_name}: {e}"
@@ -151,7 +151,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi_entry, roi_exit, pr
     
     cap.release()
     out.release()
-    base.cv2.destroyAllWindows()
+    #base.cv2.destroyAllWindows()
 
 
 def main(rtsp, rtmp, cam_name, cam_id, roi_entry, roi_exit):

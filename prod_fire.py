@@ -111,7 +111,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
                     # Send Alert to Kafka
                     if producer:
-                        producer.produce("fire_alerts", json.dumps(fire_alert_payload))
+                        producer.produce("fire", json.dumps(fire_alert_payload))
                         producer.flush()
                         base.logging.info(f"🔥 Fire alert sent to Kafka")
                 except Exception as alert_ex:
@@ -121,17 +121,17 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
             out.write(frame)
 
             # ✅ Display output frame for debugging
-            base.cv2.imshow("Inference", frame)
-            if base.cv2.waitKey(1) & 0xFF == 27:
-                base.logging.info("❌ User terminated the process.")
-                break
+            # base.cv2.imshow("Inference", frame)
+            # if base.cv2.waitKey(1) & 0xFF == 27:
+            #     base.logging.info("❌ User terminated the process.")
+            #     break
         except Exception as e:
             base.logging.error(f"❌ Unexpected error: {e}")
             continue
 
     cap.release()
     out.release()
-    base.cv2.destroyAllWindows()
+    # base.cv2.destroyAllWindows()
 
 # ✅ Main Function
 def main(rtsp, rtmp, cam_name, cam_id, roi, model_path):

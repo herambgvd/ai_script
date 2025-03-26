@@ -178,13 +178,13 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                             "cam_id": cam_id,
                             "alert_frame": alert_frame,
                             "full_frame": full_frame,
-                            "category": class_name,
                             "details": {
+                                "category": class_name,
                                 "upper_wear": {"rgb": upper_rgb, "hex": upper_hex},
                                 "lower_wear": {"rgb": lower_rgb, "hex": lower_hex}
                             }
                         }
-                        send_alert(alert_msg, producer, "person_alerts", api_url)
+                        send_alert(alert_msg, producer, "suspect", api_url)
                         person_data[track_id] = alert_msg 
                     elif class_name in ["handbag", "backpack", "suitcase"]:
                         if track_id in processed_bag_ids:
@@ -200,19 +200,19 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
                             "cam_id": cam_id,
                             "alert_frame": alert_frame,
                             "full_frame": full_frame,
-                            "category": class_name,
                             "details": {
+                                "category": class_name,
                                 "rgb": obj_rgb,
                                 "hex": obj_hex
                             }
                         }
-                        send_alert(alert_msg, producer, "bag_alerts", api_url)
+                        send_alert(alert_msg, producer, "suspect", api_url)
                         processed_bag_ids.add(track_id) 
 
             out.write(frame)
-            cv2.imshow("Inference", frame)
-            if cv2.waitKey(1) & 0xFF == 27:
-                break
+            # cv2.imshow("Inference", frame)
+            # if cv2.waitKey(1) & 0xFF == 27:
+                # break
 
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
@@ -220,7 +220,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
     cap.release()
     out.release()
-    cv2.destroyAllWindows()
+    # cv2.destroyAllWindows()
 
 
 # ✅ Main Process

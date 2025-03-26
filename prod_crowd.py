@@ -114,9 +114,9 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer, threshol
                     base.logging.error(f"❌ Error sending data to API: {api_ex}")
 
             out.write(frame)
-            base.cv2.imshow("Inference", frame)
-            if base.cv2.waitKey(1) & 0xFF == 27:
-                break
+            # base.cv2.imshow("Inference", frame)
+            # if base.cv2.waitKey(1) & 0xFF == 27:
+            #     break
 
         except Exception as e:
             base.logging.error(f"❌ Unexpected error: {e}")
@@ -124,7 +124,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer, threshol
 
     cap.release()
     out.release()
-    base.cv2.destroyAllWindows()
+    #base.cv2.destroyAllWindows()
 
 # ✅ Main Process
 def main(rtsp, rtmp, cam_name, cam_id, roi, threshold):

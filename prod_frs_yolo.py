@@ -68,7 +68,7 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
 
     API_ENDPOINT = "http://0.0.0.0:8080/api/v1/frs/event"  # Replace with actual API endpoint
     KAFKA_TOPIC = "frs"
-    CONFIDENCE_THRESHOLD = 0.70  # ✅ Send alert only if confidence > 70%
+    CONFIDENCE_THRESHOLD = 0.80  # ✅ Send alert only if confidence > 70%
 
     # ✅ Track alerted IDs to avoid duplicate alerts
     alerted_track_ids = set()
@@ -166,13 +166,13 @@ def process_stream(cap, out, ai_model, cam_id, cam_name, roi, producer):
             out.write(frame)
 
         # ✅ Show the inference window
-        cv2.imshow("Face Detection", frame)
-        if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
-            break
+        #cv2.imshow("Face Detection", frame)
+        #if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
+          #  break
 
     cap.release()
     out.release()
-    cv2.destroyAllWindows()
+    #cv2.destroyAllWindows()
 
 
 # ✅ Main Process
