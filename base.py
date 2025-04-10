@@ -108,14 +108,14 @@ def initialize_capture(rtsp_url, max_retries=3, use_ffmpeg=False):
     # ✅ Attempt to open video stream with retries
     for attempt in range(1, max_retries + 1):
         logging.info(f"🚀 Attempt {attempt}/{max_retries} to open RTSP stream...")
-        if not use_ffmpeg:
-            logging.debug("Attempting to open stream with GStreamer backend...")
-            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-            backend_used = "GStreamer"
-        else:
-            logging.debug("Attempting to open stream with FFMPEG backend...")
-            cap = cv2.VideoCapture(ffmpeg_pipeline, cv2.CAP_FFMPEG)
-            backend_used = "FFMPEG"
+        # if not use_ffmpeg:
+        #     logging.debug("Attempting to open stream with GStreamer backend...")
+        #     cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+        #     backend_used = "GStreamer"
+        # else:
+        logging.debug("Attempting to open stream with FFMPEG backend...")
+        cap = cv2.VideoCapture(ffmpeg_pipeline, cv2.CAP_FFMPEG)
+        backend_used = "FFMPEG"
 
         if cap.isOpened():
             logging.info(f"✅ Video capture initialized successfully using {backend_used} on attempt {attempt}.")
